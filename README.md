@@ -1,8 +1,13 @@
 # YouTube Video Özetleyici
 
-Bu proje, YouTube videolarının içeriğini otomatik olarak özetleyen iki parçalı bir uygulamadır: 
-- **Backend:** FastAPI ile yazılıd ve Google Gemini ile özetleme yapar.
+Bu proje, YouTube videolarının içeriğini otomatik olarak özetleyen iki parçalı bir uygulamadır:
+- **Backend:** FastAPI ile yazılıdır ve Google Gemini ile özetleme yapar.
 - **Frontend:** Streamlit ile kullanıcı dostu bir arayüz sunar.
+
+## Canlı Demo
+- https://youtube-videosummarizer3.streamlit.app/
+
+Not: Canlı demo, API kota/limitlerine bağlı olarak zaman zaman yavaşlayabilir veya hata verebilir.
 
 ## Özellikler
 - YouTube video linki girerek ana başlıklar ve detaylı özet alabilirsiniz.
@@ -14,18 +19,16 @@ Bu proje, YouTube videolarının içeriğini otomatik olarak özetleyen iki par�
 
 - **Geçmiş Özetler:**  
   Kullanıcılar, daha önce özetledikleri videoların özetlerini uygulama arayüzünde görebilecek ve bu özetlere tekrar erişebilecekler.
-- Kullanıcılar bir websitesi üzerinden siteye erişebilecekler. Local olarak kurulum yapmak zorunda kalınmayacak.   
+ 
 ---
 
 ## Lokal Kurulum
 
 ### 1. Depoyu Klonlayın
 ```bash
-git clone https://github.com/kullaniciadi/youtubeVideoSummarize.git
-cd youtubeVideoSummarize
+git clone https://github.com/yunusinal/Youtube-VideoSummarizer.git
 ```
 ### 2. Ortamı Hazırlayın
-Python 3.9+ önerilir.
 
 ```bash
 python -m venv venv
@@ -48,7 +51,7 @@ YOUTUBE_API_KEY=your_youtube_data_api_key
 
 ---
 
-## Local olarak Kullanım
+## Kullanım
 
 ### 1. Backend'i Başlatın
 
@@ -74,7 +77,7 @@ Varsayılan olarak `http://localhost:8501` adresinde açılır.
 ## Dosya Yapısı
 
 ```
-youtubeVideoSummarize/
+youtubeVideoSummarizer/
 ├── backend/
 │   ├── main.py              # FastAPI backend
 │   ├── prompts.py           # Prompt metinleri
@@ -89,7 +92,6 @@ youtubeVideoSummarize/
 ## Notlar
 - API anahtarlarınızın doğru olduğundan emin olun.
 - Eğer özetleme çalışmazsa, terminaldeki hata mesajlarını kontrol edin.
-- 
 - Sadece eğitim ve kişisel kullanım içindir.
 
 ---
