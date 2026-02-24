@@ -9,3 +9,4 @@ requests==2.31.0
 youtube-transcript-api==1.2.4
 python-multipart==0.0.9
 google-api-python-client==2.111.0
+isodate==0.6.1
