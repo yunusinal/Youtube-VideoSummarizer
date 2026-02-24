@@ -1,10 +1,24 @@
-# Byte-compiled / optimized / DLL files
+# Environment variables - API keys and secrets
+.env
+.env.local
+.env.*.local
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 
 # Virtual environments
 venv/
-ENV/
-env.bak/
-venv.bak/
+env/
+.venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

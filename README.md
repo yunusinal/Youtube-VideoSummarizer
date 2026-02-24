@@ -17,17 +17,14 @@ Bu proje, YouTube videolarının içeriğini otomatik olarak özetleyen iki par�
 - Kullanıcılar bir websitesi üzerinden siteye erişebilecekler. Local olarak kurulum yapmak zorunda kalınmayacak.   
 ---
 
-## Kurulum
+## Lokal Kurulum
 
 ### 1. Depoyu Klonlayın
-
 ```bash
 git clone https://github.com/kullaniciadi/youtubeVideoSummarize.git
 cd youtubeVideoSummarize
 ```
-
 ### 2. Ortamı Hazırlayın
-
 Python 3.9+ önerilir.
 
 ```bash
@@ -51,7 +48,7 @@ YOUTUBE_API_KEY=your_youtube_data_api_key
 
 ---
 
-## Kullanım
+## Local olarak Kullanım
 
 ### 1. Backend'i Başlatın
 
