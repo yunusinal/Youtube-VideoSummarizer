@@ -1,11 +1,10 @@
 import streamlit as st
 import requests
-import json
 import time
 import re
 from datetime import datetime
 import isodate
-import base64
+import os
 
 
 # Sayfa yapılandırması
@@ -241,6 +240,16 @@ st.markdown(
 )
 
 
+def get_backend_base_url() -> str:
+    """Backend adresini Streamlit Secrets/env üzerinden alır; yoksa localhost varsayar."""
+    try:
+        value = st.secrets.get("BACKEND_BASE_URL")
+    except Exception:
+        value = None
+    value = value or os.getenv("BACKEND_BASE_URL") or "http://localhost:8000"
+    return value.rstrip("/")
+
+
 def format_detailed_summary(summary_text):
     """Detaylı özeti güzel HTML formatına dönüştürür"""
     html_output = '<div class="detailed-summary-container">'
@@ -346,16 +355,17 @@ Video linkini yapıştırın ve özeti alın!
 """)
 
 # API endpoint'leri
-API_URL = "http://localhost:8000/summarize"
-VIDEO_DETAILS_URL = "http://localhost:8000/video-details"
-STATUS_URL = "http://localhost:8000/summary-status"
-DOWNLOAD_URL = "http://localhost:8000/download-summary"
+BACKEND_BASE_URL = get_backend_base_url()
+API_URL = f"{BACKEND_BASE_URL}/summarize"
+VIDEO_DETAILS_URL = f"{BACKEND_BASE_URL}/video-details"
+STATUS_URL = f"{BACKEND_BASE_URL}/summary-status"
+DOWNLOAD_URL = f"{BACKEND_BASE_URL}/download-summary"
 
 
 @st.cache_data(show_spinner=False)
 def fetch_video_details(url: str):
     """Video detaylarını cache'ler — rerun'larda tekrar istek atmaz."""
-    response = requests.post(VIDEO_DETAILS_URL, json={"url": url})
+    response = requests.post(VIDEO_DETAILS_URL, json={"url": url}, timeout=60)
     if response.status_code == 200:
         return response.json()
     return None
@@ -364,7 +374,7 @@ def fetch_video_details(url: str):
 @st.cache_data(show_spinner=False)
 def fetch_thumbnail_bytes(thumbnail_url: str) -> bytes:
     """Thumbnail'i cache'ler — rerun'larda tekrar indirilmez."""
-    return requests.get(thumbnail_url).content
+    return requests.get(thumbnail_url, timeout=30).content
 
 
 # Session state başlatma
@@ -463,7 +473,7 @@ if video_url:
         if st.button("Video'yu Özetle"):
             with st.spinner("Video özetleniyor..."):
                 # API'ye istek gönderme
-                response = requests.post(API_URL, json={"url": video_url})
+                response = requests.post(API_URL, json={"url": video_url}, timeout=60)
 
                 if response.status_code == 200:
                     result = response.json()
@@ -500,24 +510,45 @@ if video_url:
                     # Durumu kontrol et
                     max_retries = 60  # 5 dakika (5 saniye aralıklarla)
                     for _ in range(max_retries):
-                        status_response = requests.get(f"{STATUS_URL}/{task_id}")
+                        status_response = requests.get(
+                            f"{STATUS_URL}/{task_id}", timeout=30
+                        )
 
-                        if status_response.status_code == 200:
-                            status_data = status_response.json()
-                        # Detaylı özeti güzel formatla göster
+                        if status_response.status_code != 200:
+                            status_placeholder.info(
+                                "Detaylı özet hazırlanıyor... (durum alınamadı, tekrar deneniyor)"
+                            )
+                            time.sleep(5)
+                            continue
+
+                        status_data = status_response.json()
+
+                        if status_data.get("status") == "processing":
+                            status_placeholder.info("Detaylı özet hazırlanıyor...")
+                            time.sleep(5)
+                            continue
+
+                        if status_data.get("status") == "error":
+                            status_placeholder.error(
+                                status_data.get("result", "Detaylı özet oluşturulamadı")
+                            )
+                            break
+
+                        # completed
+                        status_placeholder.success("Detaylı özet hazır")
                         formatted_summary = format_detailed_summary(
-                            status_data["result"]
+                            status_data.get("result", "")
                         )
                         detailed_summary_placeholder.markdown(
                             formatted_summary, unsafe_allow_html=True
                         )
+
                         # İndirme butonu ekle
                         try:
                             download_response = requests.get(
-                                f"{DOWNLOAD_URL}/{task_id}"
+                                f"{DOWNLOAD_URL}/{task_id}", timeout=30
                             )
                             if download_response.status_code == 200:
-                                # İndirme butonu
                                 st.download_button(
                                     label="📥 Özeti İndir",
                                     data=download_response.content,
@@ -533,7 +564,6 @@ if video_url:
                             st.error(f"İndirme hatası: {str(e)}")
 
                         break
-                        time.sleep(5)  # 5 saniye bekle
 
                 else:
                     error_message = response.json().get(
@@ -541,9 +571,13 @@ if video_url:
                     )
                     st.error(f"Hata oluştu: {error_message}")
 
+    except requests.exceptions.Timeout:
+        st.error(
+            "İstek zaman aşımına uğradı. Backend yeni uyandıysa (cold start) 20-60 saniye sürebilir; tekrar deneyin."
+        )
     except requests.exceptions.ConnectionError:
         st.error(
-            "Backend servisine bağlanılamıyor. Lütfen backend servisinin çalıştığından emin olun."
+            "Backend servisine bağlanılamıyor. Streamlit Cloud'da `localhost` çalışmaz; `BACKEND_BASE_URL` ile yayınlanmış backend adresini tanımlayın."
         )
     except Exception as e:
         st.error(f"Bir hata oluştu: {str(e)}")

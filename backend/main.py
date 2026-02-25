@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import io
 import time
-import asyncio
+
 
 
 import google.generativeai as genai
@@ -41,6 +41,11 @@ if not GOOGLE_API_KEY:
     raise ValueError("GOOGLE_API_KEY environment variable is not set")
 
 genai.configure(api_key=GOOGLE_API_KEY)
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
 
 # Retry mekanizması ile Gemini API çağrısı
