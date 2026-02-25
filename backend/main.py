@@ -3,13 +3,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import io
 import time
-
+import random
 
 
 import google.generativeai as genai
 from pydantic import BaseModel
 import os
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 import re
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
@@ -17,7 +18,41 @@ from googleapiclient.discovery import build
 from prompts import BULLET_POINTS_PROMPT, DETAILED_SUMMARY_PROMPT
 
 
+# Proxy olmadan varsayılan API instance
 ytt_api = YouTubeTranscriptApi()
+
+# Webshare.io ücretsiz proxy listesi
+PROXY_LIST = [
+    "31.59.20.176:6754",
+    "23.95.150.145:6114",
+    "198.23.239.134:6540",
+    "45.38.107.97:6014",
+    "107.172.163.27:6543",
+    "198.105.121.200:6462",
+    "64.137.96.74:6641",
+    "216.10.27.159:6837",
+    "142.111.67.146:5611",
+    "23.26.53.37:6003",
+]
+
+
+def create_proxy_api():
+    """Rastgele bir proxy ile YouTubeTranscriptApi instance'ı oluşturur"""
+    username = os.getenv("PROXY_USERNAME")
+    password = os.getenv("PROXY_PASSWORD")
+
+    if not username or not password:
+        print("Proxy bilgileri bulunamadı, proxy'siz devam ediliyor...")
+        return YouTubeTranscriptApi()
+
+    proxy = random.choice(PROXY_LIST)
+    proxy_url = f"http://{username}:{password}@{proxy}"
+
+    proxy_config = GenericProxyConfig(
+        http_url=proxy_url,
+        https_url=proxy_url,
+    )
+    return YouTubeTranscriptApi(proxy_config=proxy_config)
 
 
 # Load environment variables
@@ -157,48 +192,69 @@ def format_timestamp(seconds: float) -> str:
 
 
 def get_transcript(video_id: str) -> str:
-    try:
-        # Önce mevcut transkript dillerini kontrol et
-        transcript_list = ytt_api.list(video_id)
+    """
+    Proxy ile transcript alır. Başarısız olursa farklı proxy'lerle tekrar dener.
+    """
+    last_error = None
+    max_attempts = min(5, len(PROXY_LIST))  # En fazla 5 farklı proxy dene
 
-        # Tercih sırası: Türkçe, İngilizce, sonra mevcut herhangi bir dil
-        preferred_languages = ["tr", "en"]
-        selected_transcript = None
-
-        # Önce tercih edilen dilleri dene
-        for lang in preferred_languages:
-            for t in transcript_list:
-                if t.language_code == lang:
-                    selected_transcript = t
-                    break
-            if selected_transcript:
-                break
-
-        # Tercih edilen dil yoksa, mevcut ilk transkripti al
-        if not selected_transcript and transcript_list:
-            selected_transcript = transcript_list[0]
-
-        if not selected_transcript:
-            raise HTTPException(
-                status_code=400, detail="Bu video için transkript bulunamadı."
+    for attempt in range(max_attempts):
+        try:
+            # Her denemede farklı proxy ile yeni API instance oluştur
+            api = create_proxy_api()
+            proxy_info = "proxy ile" if os.getenv("PROXY_USERNAME") else "proxy'siz"
+            print(
+                f"Transcript alınıyor ({proxy_info}) - Deneme {attempt + 1}/{max_attempts}"
             )
 
-        # Transkripti al - timestamp'lerle birlikte formatla
-        transcript_data = selected_transcript.fetch()
-        formatted_transcript = []
-        for item in transcript_data:
-            start_time = format_timestamp(item.start)
-            end_time = format_timestamp(item.start + item.duration)
-            formatted_transcript.append(f"[{start_time}-{end_time}] {item.text}")
-        
-        return "\n".join(formatted_transcript)
+            # Önce mevcut transkript dillerini kontrol et
+            transcript_list = api.list(video_id)
 
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        raise HTTPException(
-            status_code=400, detail=f"Video transkripti alınamadı: {str(e)}"
-        )
+            # Tercih sırası: Türkçe, İngilizce, sonra mevcut herhangi bir dil
+            preferred_languages = ["tr", "en"]
+            selected_transcript = None
+
+            # Önce tercih edilen dilleri dene
+            for lang in preferred_languages:
+                for t in transcript_list:
+                    if t.language_code == lang:
+                        selected_transcript = t
+                        break
+                if selected_transcript:
+                    break
+
+            # Tercih edilen dil yoksa, mevcut ilk transkripti al
+            if not selected_transcript and transcript_list:
+                selected_transcript = transcript_list[0]
+
+            if not selected_transcript:
+                raise HTTPException(
+                    status_code=400, detail="Bu video için transkript bulunamadı."
+                )
+
+            # Transkripti al - timestamp'lerle birlikte formatla
+            transcript_data = selected_transcript.fetch()
+            formatted_transcript = []
+            for item in transcript_data:
+                start_time = format_timestamp(item.start)
+                end_time = format_timestamp(item.start + item.duration)
+                formatted_transcript.append(f"[{start_time}-{end_time}] {item.text}")
+
+            print(f"Transcript başarıyla alındı! (Deneme {attempt + 1})")
+            return "\n".join(formatted_transcript)
+
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            last_error = e
+            print(f"Proxy denemesi {attempt + 1} başarısız: {str(e)}")
+            continue
+
+    # Tüm proxy denemeleri başarısız olduysa
+    raise HTTPException(
+        status_code=400,
+        detail=f"Video transkripti alınamadı (tüm proxy'ler denendi): {str(last_error)}",
+    )
 
 
 # Özet durumlarını saklamak için global bir sözlük
