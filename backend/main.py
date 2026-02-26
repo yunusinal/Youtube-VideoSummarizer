@@ -18,6 +18,9 @@ from googleapiclient.discovery import build
 from prompts import BULLET_POINTS_PROMPT, DETAILED_SUMMARY_PROMPT
 
 
+# Load environment variables (en başta yükle)
+load_dotenv()
+
 # Proxy olmadan varsayılan API instance
 ytt_api = YouTubeTranscriptApi()
 
@@ -36,8 +39,8 @@ PROXY_LIST = [
 ]
 
 
-def create_proxy_api():
-    """Rastgele bir proxy ile YouTubeTranscriptApi instance'ı oluşturur"""
+def create_proxy_api(proxy_address: str = None):
+    """Belirli veya rastgele bir proxy ile YouTubeTranscriptApi instance'ı oluşturur"""
     username = os.getenv("PROXY_USERNAME")
     password = os.getenv("PROXY_PASSWORD")
 
@@ -45,8 +48,9 @@ def create_proxy_api():
         print("Proxy bilgileri bulunamadı, proxy'siz devam ediliyor...")
         return YouTubeTranscriptApi()
 
-    proxy = random.choice(PROXY_LIST)
+    proxy = proxy_address or random.choice(PROXY_LIST)
     proxy_url = f"http://{username}:{password}@{proxy}"
+    print(f"Proxy kullanılıyor: {proxy}")
 
     proxy_config = GenericProxyConfig(
         http_url=proxy_url,
@@ -55,8 +59,6 @@ def create_proxy_api():
     return YouTubeTranscriptApi(proxy_config=proxy_config)
 
 
-# Load environment variables
-load_dotenv()
 app = FastAPI()
 
 # CORS ayarları (frontend ile backend arasında kullanılacak)
@@ -191,69 +193,86 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _fetch_transcript_with_api(api, video_id: str) -> str:
+    """Verilen API instance'ı ile transcript alır"""
+    # Önce mevcut transkript dillerini kontrol et
+    transcript_list = api.list(video_id)
+
+    # Tercih sırası: Türkçe, İngilizce, sonra mevcut herhangi bir dil
+    preferred_languages = ["tr", "en"]
+    selected_transcript = None
+
+    # Önce tercih edilen dilleri dene
+    for lang in preferred_languages:
+        for t in transcript_list:
+            if t.language_code == lang:
+                selected_transcript = t
+                break
+        if selected_transcript:
+            break
+
+    # Tercih edilen dil yoksa, mevcut ilk transkripti al
+    if not selected_transcript and transcript_list:
+        selected_transcript = transcript_list[0]
+
+    if not selected_transcript:
+        raise HTTPException(
+            status_code=400, detail="Bu video için transkript bulunamadı."
+        )
+
+    # Transkripti al - timestamp'lerle birlikte formatla
+    transcript_data = selected_transcript.fetch()
+    formatted_transcript = []
+    for item in transcript_data:
+        start_time = format_timestamp(item.start)
+        end_time = format_timestamp(item.start + item.duration)
+        formatted_transcript.append(f"[{start_time}-{end_time}] {item.text}")
+
+    return "\n".join(formatted_transcript)
+
+
 def get_transcript(video_id: str) -> str:
     """
     Proxy ile transcript alır. Başarısız olursa farklı proxy'lerle tekrar dener.
+    Son çare olarak proxy'siz direkt bağlantı dener.
     """
     last_error = None
-    max_attempts = min(5, len(PROXY_LIST))  # En fazla 5 farklı proxy dene
+    proxies_to_try = random.sample(PROXY_LIST, min(5, len(PROXY_LIST)))
 
-    for attempt in range(max_attempts):
+    # 1) Proxy'lerle dene
+    for attempt, proxy_addr in enumerate(proxies_to_try, 1):
         try:
-            # Her denemede farklı proxy ile yeni API instance oluştur
-            api = create_proxy_api()
-            proxy_info = "proxy ile" if os.getenv("PROXY_USERNAME") else "proxy'siz"
+            api = create_proxy_api(proxy_address=proxy_addr)
             print(
-                f"Transcript alınıyor ({proxy_info}) - Deneme {attempt + 1}/{max_attempts}"
+                f"Transcript alınıyor (proxy: {proxy_addr}) - Deneme {attempt}/{len(proxies_to_try)}"
             )
-
-            # Önce mevcut transkript dillerini kontrol et
-            transcript_list = api.list(video_id)
-
-            # Tercih sırası: Türkçe, İngilizce, sonra mevcut herhangi bir dil
-            preferred_languages = ["tr", "en"]
-            selected_transcript = None
-
-            # Önce tercih edilen dilleri dene
-            for lang in preferred_languages:
-                for t in transcript_list:
-                    if t.language_code == lang:
-                        selected_transcript = t
-                        break
-                if selected_transcript:
-                    break
-
-            # Tercih edilen dil yoksa, mevcut ilk transkripti al
-            if not selected_transcript and transcript_list:
-                selected_transcript = transcript_list[0]
-
-            if not selected_transcript:
-                raise HTTPException(
-                    status_code=400, detail="Bu video için transkript bulunamadı."
-                )
-
-            # Transkripti al - timestamp'lerle birlikte formatla
-            transcript_data = selected_transcript.fetch()
-            formatted_transcript = []
-            for item in transcript_data:
-                start_time = format_timestamp(item.start)
-                end_time = format_timestamp(item.start + item.duration)
-                formatted_transcript.append(f"[{start_time}-{end_time}] {item.text}")
-
-            print(f"Transcript başarıyla alındı! (Deneme {attempt + 1})")
-            return "\n".join(formatted_transcript)
+            result = _fetch_transcript_with_api(api, video_id)
+            print(f"Transcript başarıyla alındı! (proxy: {proxy_addr})")
+            return result
 
         except HTTPException as he:
             raise he
         except Exception as e:
             last_error = e
-            print(f"Proxy denemesi {attempt + 1} başarısız: {str(e)}")
+            print(f"Proxy denemesi {attempt} başarısız ({proxy_addr}): {str(e)}")
             continue
 
-    # Tüm proxy denemeleri başarısız olduysa
+    # 2) Son çare: proxy'siz direkt bağlantı dene
+    try:
+        print("Tüm proxy'ler başarısız oldu. Direkt bağlantı deneniyor...")
+        api = YouTubeTranscriptApi()
+        result = _fetch_transcript_with_api(api, video_id)
+        print("Transcript direkt bağlantı ile alındı!")
+        return result
+    except HTTPException as he:
+        raise he
+    except Exception as direct_error:
+        print(f"Direkt bağlantı da başarısız: {str(direct_error)}")
+
+    # Her şey başarısız olduysa
     raise HTTPException(
         status_code=400,
-        detail=f"Video transkripti alınamadı (tüm proxy'ler denendi): {str(last_error)}",
+        detail=f"Video transkripti alınamadı. Proxy hatası: {str(last_error)}",
     )
 
 
