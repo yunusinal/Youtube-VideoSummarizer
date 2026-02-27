@@ -394,8 +394,6 @@ if video_url:
             )
             st.stop()
 
-        # Video kartı
-        st.markdown('<div class="video-card">', unsafe_allow_html=True)
         # Video başlığı
         st.markdown(f"### {video_details['title']}")
 
@@ -409,8 +407,6 @@ if video_url:
 
         with col2:
             # Video istatistikleri
-            st.markdown('<div class="video-stats">', unsafe_allow_html=True)
-
             # Görüntülenme sayısı
             st.markdown(
                 f"""
@@ -451,8 +447,6 @@ if video_url:
                 unsafe_allow_html=True,
             )
 
-            st.markdown("</div>", unsafe_allow_html=True)
-
             # Kanal bilgisi
             st.markdown(f"**Kanal:** {video_details['channel_title']}")
 
@@ -461,8 +455,6 @@ if video_url:
                 video_details["published_at"].replace("Z", "+00:00")
             )
             st.markdown(f"**Yayınlanma Tarihi:** {published_date.strftime('%d/%m/%Y')}")
-
-        st.markdown("</div>", unsafe_allow_html=True)
 
         # Özetleme butonu
         if st.button("Video'yu Özetle"):

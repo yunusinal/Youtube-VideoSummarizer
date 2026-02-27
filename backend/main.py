@@ -234,6 +234,10 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
 
     # Önce tercih edilen dillerle, sonra dil belirtmeden dene
     langs_to_try = ["tr", "en", None]
+    errors: list[str] = []
+
+    # Proxy desteği (env'den alınır, yoksa doğrudan bağlanır)
+    proxy = os.getenv("YT_DLP_PROXY")
 
     for lang in langs_to_try:
         try:
@@ -246,21 +250,29 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
             }
             if lang:
                 ydl_opts["subtitleslangs"] = [lang]
+            if proxy:
+                ydl_opts["proxy"] = proxy
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 video_info = ydl.extract_info(video_url, download=False)
 
             if not video_info:
-                print(f"yt-dlp ({lang or 'any'}) video bilgisi alınamadı.")
+                msg = f"yt-dlp ({lang or 'any'}) video bilgisi alınamadı."
+                print(msg)
+                errors.append(msg)
                 continue
 
             sub_data, found_lang = _find_subtitle_data(video_info, lang)
             if not sub_data:
-                print(f"yt-dlp: {lang or 'any'} dilinde altyazı bulunamadı.")
+                msg = f"yt-dlp: {lang or 'any'} dilinde altyazı bulunamadı."
+                print(msg)
+                errors.append(msg)
                 continue
 
             sub_url = _get_sub_url(sub_data)
             if not sub_url:
+                msg = f"yt-dlp ({lang or 'any'}) altyazı URL'si bulunamadı."
+                errors.append(msg)
                 continue
 
             lines = _parse_json3_subtitle(sub_url)
@@ -269,9 +281,13 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
                 return "\n".join(lines)
 
         except Exception as e:
-            print(f"yt-dlp ({lang or 'any'}) hatası: {str(e)[:300]}")
+            msg = f"yt-dlp ({lang or 'any'}) hatası: {str(e)[:300]}"
+            print(msg)
+            errors.append(msg)
 
-    raise Exception("yt-dlp ile de transcript alınamadı.")
+    raise Exception(
+        "yt-dlp ile de transcript alınamadı. Detaylar: " + " | ".join(errors)
+    )
 
 
 def get_transcript(video_id: str) -> str:
