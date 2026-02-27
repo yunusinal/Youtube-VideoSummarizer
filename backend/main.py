@@ -280,6 +280,7 @@ def get_transcript(video_id: str) -> str:
     1) youtube_transcript_api ile dener (lokal)
     2) Başarısız olursa yt-dlp fallback kullanır (canlı için)
     """
+    errors: list[str] = []
 
     # 1) youtube_transcript_api ile dene
     try:
@@ -289,7 +290,9 @@ def get_transcript(video_id: str) -> str:
         print("Transcript başarıyla alındı! (youtube_transcript_api)")
         return result
     except Exception as e:
-        print(f"youtube_transcript_api başarısız: {str(e)[:200]}")
+        msg = f"youtube_transcript_api: {str(e)[:300]}"
+        print(msg)
+        errors.append(msg)
 
     # 2) yt-dlp fallback
     try:
@@ -297,13 +300,54 @@ def get_transcript(video_id: str) -> str:
         result = _fetch_transcript_with_ytdlp(video_id)
         return result
     except Exception as e:
-        print(f"yt-dlp de başarısız: {str(e)[:200]}")
+        msg = f"yt-dlp: {str(e)[:300]}"
+        print(msg)
+        errors.append(msg)
 
     # Her ikisi de başarısız
-    raise HTTPException(
-        status_code=400,
-        detail="Video transkripti alınamadı. Lütfen videonun altyazısı olduğundan emin olun.",
-    )
+    detail = "Video transkripti alınamadı. " + " | ".join(errors)
+    raise HTTPException(status_code=400, detail=detail)
+
+
+@app.get("/debug-transcript/{video_id}")
+async def debug_transcript(video_id: str):
+    """Canlı ortamda transcript hatalarını teşhis etmek için debug endpoint."""
+    import traceback as tb
+
+    results: dict = {"video_id": video_id, "yt_dlp_version": yt_dlp.version.__version__}
+
+    # youtube_transcript_api
+    try:
+        api = YouTubeTranscriptApi()
+        transcript = _fetch_transcript_with_api(api, video_id)
+        results["method1_youtube_transcript_api"] = {
+            "status": "success",
+            "lines": len(transcript.split("\n")),
+            "preview": transcript[:200],
+        }
+    except Exception as e:
+        results["method1_youtube_transcript_api"] = {
+            "status": "error",
+            "error": str(e)[:500],
+            "traceback": tb.format_exc()[-500:],
+        }
+
+    # yt-dlp
+    try:
+        transcript = _fetch_transcript_with_ytdlp(video_id)
+        results["method2_ytdlp"] = {
+            "status": "success",
+            "lines": len(transcript.split("\n")),
+            "preview": transcript[:200],
+        }
+    except Exception as e:
+        results["method2_ytdlp"] = {
+            "status": "error",
+            "error": str(e)[:500],
+            "traceback": tb.format_exc()[-500:],
+        }
+
+    return results
 
 
 summary_status = {}
