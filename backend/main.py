@@ -237,22 +237,18 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
 
     for lang in langs_to_try:
         try:
-            cmd = ["yt-dlp", "--skip-download", "--dump-json", video_url]
+            cmd = ["yt-dlp", "--skip-download", "--write-auto-subs"]
             if lang:
-                cmd[2:2] = [
-                    "--write-subs",
-                    "--write-auto-subs",
-                    "--sub-lang",
-                    lang,
-                    "--sub-format",
-                    "json3",
-                    "--output",
-                    "-",
-                ]
+                cmd += ["--sub-lang", lang]
+            cmd += ["--sub-format", "json3", "--dump-json", video_url]
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0:
                 print(f"yt-dlp ({lang or 'any'}) başarısız: {result.stderr[:200]}")
+                continue
+
+            if not result.stdout.strip():
+                print(f"yt-dlp ({lang or 'any'}) boş çıktı verdi.")
                 continue
 
             # JSON çıktısından altyazı URL'sini al
