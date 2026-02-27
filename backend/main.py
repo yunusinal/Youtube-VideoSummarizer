@@ -4,9 +4,9 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import time
-import subprocess
 import json
 import uuid
+import yt_dlp
 
 import google.generativeai as genai
 import requests as http_requests
@@ -227,7 +227,7 @@ def _find_subtitle_data(
 
 def _fetch_transcript_with_ytdlp(video_id: str) -> str:
     """
-    Fallback yöntemi: yt-dlp ile altyazı/caption indirir.
+    Fallback yöntemi: yt-dlp Python modülü ile altyazı/caption indirir.
     youtube_transcript_api başarısız olduğunda devreye girer.
     """
     video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -237,22 +237,23 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
 
     for lang in langs_to_try:
         try:
-            cmd = ["yt-dlp", "--skip-download", "--write-auto-subs"]
+            ydl_opts = {
+                "skip_download": True,
+                "writeautomaticsub": True,
+                "subtitlesformat": "json3",
+                "quiet": True,
+                "no_warnings": True,
+            }
             if lang:
-                cmd += ["--sub-lang", lang]
-            cmd += ["--sub-format", "json3", "--dump-json", video_url]
+                ydl_opts["subtitleslangs"] = [lang]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                print(f"yt-dlp ({lang or 'any'}) başarısız: {result.stderr[:200]}")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                video_info = ydl.extract_info(video_url, download=False)
+
+            if not video_info:
+                print(f"yt-dlp ({lang or 'any'}) video bilgisi alınamadı.")
                 continue
 
-            if not result.stdout.strip():
-                print(f"yt-dlp ({lang or 'any'}) boş çıktı verdi.")
-                continue
-
-            # JSON çıktısından altyazı URL'sini al
-            video_info = json.loads(result.stdout)
             sub_data, found_lang = _find_subtitle_data(video_info, lang)
             if not sub_data:
                 print(f"yt-dlp: {lang or 'any'} dilinde altyazı bulunamadı.")
@@ -267,10 +268,8 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
                 print(f"yt-dlp ile transcript alındı (dil: {found_lang})")
                 return "\n".join(lines)
 
-        except subprocess.TimeoutExpired:
-            print(f"yt-dlp ({lang or 'any'}) zaman aşımına uğradı.")
         except Exception as e:
-            print(f"yt-dlp ({lang or 'any'}) hatası: {str(e)}")
+            print(f"yt-dlp ({lang or 'any'}) hatası: {str(e)[:300]}")
 
     raise Exception("yt-dlp ile de transcript alınamadı.")
 
