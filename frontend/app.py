@@ -377,11 +377,6 @@ def fetch_thumbnail_bytes(thumbnail_url: str) -> bytes:
     return requests.get(thumbnail_url, timeout=30).content
 
 
-# Session state başlatma
-if "summaries" not in st.session_state:
-    st.session_state.summaries = {}
-# Toggle bar ile ilgili kodlar kaldırıldı
-# URL giriş alanı
 video_url = st.text_input(
     "YouTube Video URL'sini yapıştırın:",
     placeholder="https://www.youtube.com/watch?v=...",
