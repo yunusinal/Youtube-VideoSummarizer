@@ -22,3 +22,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# YouTube cookies (gizli tutulmalı)
+cookies.txt
+backend/cookies.txt

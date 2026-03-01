@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import time
 import json
 import uuid
+import base64
+from collections import defaultdict
 import yt_dlp
 
 import google.generativeai as genai
 import requests as http_requests
 from pydantic import BaseModel
 import os
+from pathlib import Path
 from youtube_transcript_api import YouTubeTranscriptApi
 import re
 from dotenv import load_dotenv
@@ -20,6 +23,74 @@ from googleapiclient.discovery import build
 from prompts import BULLET_POINTS_PROMPT, DETAILED_SUMMARY_PROMPT
 
 load_dotenv()
+
+
+# ---- Cookie Desteği ----
+# Aranacak cookie yolları (öncelik sırasıyla):
+# 1. Render Secret Files: /etc/secrets/cookies.txt
+# 2. Lokal: backend/cookies.txt
+# 3. YT_COOKIES_BASE64 env'den oluşturulan dosya
+_COOKIE_PATHS = [
+    Path("/etc/secrets/cookies.txt"),  # Render Secret Files
+    Path(__file__).parent / "cookies.txt",  # Lokal geliştirme
+]
+
+
+def _init_cookies() -> Path | None:
+    """
+    Cookie dosyasını bulur. Önce Render Secret Files, sonra lokal dosya,
+    son çare olarak YT_COOKIES_BASE64 env'den oluşturur.
+    """
+    # Mevcut dosyaları kontrol et
+    for path in _COOKIE_PATHS:
+        if path.exists():
+            print(f"cookies.txt bulundu: {path} ({path.stat().st_size} byte)")
+            return path
+
+    # Hiçbiri yoksa base64 env'den oluştur
+    cookie_b64 = os.getenv("YT_COOKIES_BASE64")
+    fallback_path = _COOKIE_PATHS[1]  # backend/cookies.txt
+    if cookie_b64:
+        try:
+            cookie_bytes = base64.b64decode(cookie_b64)
+            fallback_path.write_bytes(cookie_bytes)
+            print(f"cookies.txt env'den oluşturuldu ({len(cookie_bytes)} byte)")
+            return fallback_path
+        except Exception as e:
+            print(f"Cookie decode hatası: {e}")
+
+    print("UYARI: cookies.txt bulunamadı!")
+    return None
+
+
+COOKIES_FILE = _init_cookies()
+
+
+def _get_cookies_path() -> str | None:
+    """Eğer cookies.txt mevcutsa yolunu döndürür, yoksa None."""
+    if COOKIES_FILE and COOKIES_FILE.exists():
+        return str(COOKIES_FILE)
+    return None
+
+
+# ---- Rate Limiting ----
+RATE_LIMIT_WINDOW = 60  # saniye
+RATE_LIMIT_MAX = 5  # pencere başına maks istek (IP başına)
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(client_ip: str):
+    """IP başına dakikada max RATE_LIMIT_MAX istek izni verir."""
+    now = time.time()
+    _rate_limit_store[client_ip] = [
+        t for t in _rate_limit_store[client_ip] if now - t < RATE_LIMIT_WINDOW
+    ]
+    if len(_rate_limit_store[client_ip]) >= RATE_LIMIT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Çok fazla istek. Lütfen {RATE_LIMIT_WINDOW} saniye sonra tekrar deneyin.",
+        )
+    _rate_limit_store[client_ip].append(now)
 
 
 app = FastAPI()
@@ -253,6 +324,12 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
             if proxy:
                 ydl_opts["proxy"] = proxy
 
+            # Cookie desteği
+            cookie_path = _get_cookies_path()
+            if cookie_path:
+                ydl_opts["cookiefile"] = cookie_path
+                print("yt-dlp: cookies.txt kullanılıyor")
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 video_info = ydl.extract_info(video_url, download=False)
 
@@ -298,10 +375,34 @@ def get_transcript(video_id: str) -> str:
     """
     errors: list[str] = []
 
+    # Proxy desteği
+    proxy = os.getenv("YT_DLP_PROXY")
+
     # 1) youtube_transcript_api ile dene
     try:
         print("Yöntem 1: youtube_transcript_api ile deneniyor...")
-        api = YouTubeTranscriptApi()
+
+        # Cookie desteği
+        cookie_path = _get_cookies_path()
+        api_kwargs = {}
+
+        if cookie_path:
+            from http.cookiejar import MozillaCookieJar
+
+            cj = MozillaCookieJar(cookie_path)
+            cj.load(ignore_discard=True, ignore_expires=True)
+            api_kwargs["cookie_jar"] = cj
+            print("youtube_transcript_api: cookies.txt kullanılıyor")
+
+        if proxy:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+
+            api_kwargs["proxy_config"] = GenericProxyConfig(
+                http_url=proxy,
+                https_url=proxy,
+            )
+
+        api = YouTubeTranscriptApi(**api_kwargs)
         result = _fetch_transcript_with_api(api, video_id)
         print("Transcript başarıyla alındı! (youtube_transcript_api)")
         return result
@@ -330,7 +431,25 @@ async def debug_transcript(video_id: str):
     """Canlı ortamda transcript hatalarını teşhis etmek için debug endpoint."""
     import traceback as tb
 
-    results: dict = {"video_id": video_id, "yt_dlp_version": yt_dlp.version.__version__}
+    proxy = os.getenv("YT_DLP_PROXY")
+    cookie_path = _get_cookies_path()
+    results: dict = {
+        "video_id": video_id,
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "proxy_configured": bool(proxy),
+        "proxy_value": (proxy[:15] + "***") if proxy else None,
+        "cookies_file_exists": cookie_path is not None,
+    }
+
+    # Proxy ile IP testi
+    try:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        ip_resp = http_requests.get(
+            "https://api.ipify.org?format=json", proxies=proxies, timeout=10
+        )
+        results["outbound_ip"] = ip_resp.json().get("ip", "bilinmiyor")
+    except Exception as e:
+        results["outbound_ip_error"] = str(e)[:200]
 
     # youtube_transcript_api
     try:
@@ -370,8 +489,14 @@ summary_status = {}
 
 
 @app.post("/summarize")
-async def summarize_video(video: VideoURL, background_tasks: BackgroundTasks):
+async def summarize_video(
+    video: VideoURL, request: Request, background_tasks: BackgroundTasks
+):
     try:
+        # Rate limit kontrolü
+        client_ip = request.client.host if request.client else "unknown"
+        _check_rate_limit(client_ip)
+
         video_id = extract_video_id(video.url)
         transcript = get_transcript(video_id)
         model = genai.GenerativeModel("gemini-2.0-flash")

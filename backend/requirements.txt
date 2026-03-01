@@ -6,6 +6,7 @@ python-dotenv==1.0.0
 requests==2.31.0
 youtube-transcript-api==1.2.4
 yt-dlp
+curl_cffi
 python-multipart==0.0.9
 google-api-python-client==2.149.0
 isodate==0.7.2
