@@ -55,16 +55,29 @@ def _validate_cookie_line(line: str) -> bool:
 def _sanitize_cookies(source: Path, dest: Path) -> None:
     """
     Cookie dosyasını okur, hatalı satırları çıkarır ve dest'e yazar.
+    Boş value alanı olan cookie'ler hakkında uyarı verir.
     """
     raw = source.read_text(encoding="utf-8", errors="replace")
     good_lines = []
+    empty_value_count = 0
     for line in raw.splitlines():
         if _validate_cookie_line(line):
             good_lines.append(line)
+            # Boş value uyarısı
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                parts = stripped.split("\t")
+                if len(parts) >= 7 and not parts[6].strip():
+                    empty_value_count += 1
         else:
             print(f"Cookie: hatalı satır atlandı → {line!r}")
     dest.write_text("\n".join(good_lines) + "\n", encoding="utf-8")
     print(f"Cookie: {len(good_lines)} geçerli satır → {dest}")
+    if empty_value_count > 0:
+        print(
+            f"⚠️  Cookie UYARI: {empty_value_count} cookie'nin value alanı boş! "
+            "Cookies'i tarayıcıdan tekrar export edin."
+        )
 
 
 def _init_cookies() -> Path | None:
@@ -408,11 +421,12 @@ def _fetch_transcript_with_ytdlp(video_id: str) -> str:
     )
 
 
-def get_transcript(video_id: str) -> str:
+def get_transcript(video_id: str) -> tuple[str, str]:
     """
-    Transcript alır:
-    1) youtube_transcript_api ile dener (lokal)
-    2) Başarısız olursa yt-dlp fallback kullanır (canlı için)
+    Transcript alır. Hangi yöntemle alındığını da döndürür.
+    Returns: (transcript_text, method_name)
+    1) youtube_transcript_api ile dener
+    2) Başarısız olursa yt-dlp fallback kullanır
     """
     errors: list[str] = []
 
@@ -423,17 +437,23 @@ def get_transcript(video_id: str) -> str:
     try:
         print("Yöntem 1: youtube_transcript_api ile deneniyor...")
 
-        # Cookie desteği
+        # Cookie desteği — http_client üzerinden Session'a cookie yüklenir
         cookie_path = _get_cookies_path()
         api_kwargs = {}
 
         if cookie_path:
+            import requests as _req
             from http.cookiejar import MozillaCookieJar
 
             cj = MozillaCookieJar(cookie_path)
-            cj.load(ignore_discard=True, ignore_expires=True)
-            api_kwargs["cookie_jar"] = cj
-            print("youtube_transcript_api: cookies.txt kullanılıyor")
+            try:
+                cj.load(ignore_discard=True, ignore_expires=True)
+                session = _req.Session()
+                session.cookies = cj
+                api_kwargs["http_client"] = session
+                print(f"youtube_transcript_api: cookies yüklendi ({len(cj)} cookie)")
+            except Exception as ce:
+                print(f"youtube_transcript_api: cookie yükleme hatası: {ce}")
 
         if proxy:
             from youtube_transcript_api.proxies import GenericProxyConfig
@@ -446,7 +466,7 @@ def get_transcript(video_id: str) -> str:
         api = YouTubeTranscriptApi(**api_kwargs)
         result = _fetch_transcript_with_api(api, video_id)
         print("Transcript başarıyla alındı! (youtube_transcript_api)")
-        return result
+        return result, "youtube_transcript_api"
     except Exception as e:
         msg = f"youtube_transcript_api: {str(e)[:300]}"
         print(msg)
@@ -456,7 +476,7 @@ def get_transcript(video_id: str) -> str:
     try:
         print("Yöntem 2: yt-dlp ile deneniyor...")
         result = _fetch_transcript_with_ytdlp(video_id)
-        return result
+        return result, "yt-dlp"
     except Exception as e:
         msg = f"yt-dlp: {str(e)[:300]}"
         print(msg)
@@ -539,7 +559,7 @@ async def summarize_video(
         _check_rate_limit(client_ip)
 
         video_id = extract_video_id(video.url)
-        transcript = get_transcript(video_id)
+        transcript, transcript_method = get_transcript(video_id)
         model = genai.GenerativeModel("gemini-2.0-flash")
 
         bullet_points = generate_with_retry(
@@ -555,6 +575,7 @@ async def summarize_video(
             "bullet_points": bullet_points.text,
             "task_id": task_id,
             "message": "Ana başlıklar hazırlandı. Detaylı özet hazırlanıyor...",
+            "transcript_method": transcript_method,
         }
     except HTTPException:
         raise
