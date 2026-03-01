@@ -38,15 +38,16 @@ _COOKIE_PATHS = [
 
 def _validate_cookie_line(line: str) -> bool:
     """
-    Netscape cookie formatı: domain\tflag\tpath\tsecure\texpiration\tname\tvalue
-    7 tab-separated alan gerekir, name boş olamaz.
+    Netscape cookie formatı: domain\tflag\tpath\tsecure\texpiration\tname[\tvalue]
+    En az 6 alan gerekir (value boş/eksik olabilir), name boş olamaz.
+    Not: strip() trailing tab'ı sileceğinden rstrip('\n\r') kullanılır.
     """
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
+    stripped = line.rstrip("\n\r")
+    if not stripped.strip() or stripped.strip().startswith("#"):
         return True  # Yorum veya boş satır — geçerli
     parts = stripped.split("\t")
-    if len(parts) < 7:
-        return False  # Eksik alan
+    if len(parts) < 6:
+        return False  # Çok az alan
     if not parts[5].strip():  # name alanı boş
         return False
     return True
@@ -64,10 +65,10 @@ def _sanitize_cookies(source: Path, dest: Path) -> None:
         if _validate_cookie_line(line):
             good_lines.append(line)
             # Boş value uyarısı
-            stripped = line.strip()
+            stripped = line.rstrip("\n\r").strip()
             if stripped and not stripped.startswith("#"):
-                parts = stripped.split("\t")
-                if len(parts) >= 7 and not parts[6].strip():
+                parts = line.rstrip("\n\r").split("\t")
+                if len(parts) < 7 or not parts[6].strip():
                     empty_value_count += 1
         else:
             print(f"Cookie: hatalı satır atlandı → {line!r}")
