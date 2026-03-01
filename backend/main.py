@@ -4,9 +4,9 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import time
-import json
 import uuid
 import base64
+import tempfile
 from collections import defaultdict
 import yt_dlp
 
@@ -36,26 +36,67 @@ _COOKIE_PATHS = [
 ]
 
 
+def _validate_cookie_line(line: str) -> bool:
+    """
+    Netscape cookie formatı: domain\tflag\tpath\tsecure\texpiration\tname\tvalue
+    7 tab-separated alan gerekir, name boş olamaz.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return True  # Yorum veya boş satır — geçerli
+    parts = stripped.split("\t")
+    if len(parts) < 7:
+        return False  # Eksik alan
+    if not parts[5].strip():  # name alanı boş
+        return False
+    return True
+
+
+def _sanitize_cookies(source: Path, dest: Path) -> None:
+    """
+    Cookie dosyasını okur, hatalı satırları çıkarır ve dest'e yazar.
+    """
+    raw = source.read_text(encoding="utf-8", errors="replace")
+    good_lines = []
+    for line in raw.splitlines():
+        if _validate_cookie_line(line):
+            good_lines.append(line)
+        else:
+            print(f"Cookie: hatalı satır atlandı → {line!r}")
+    dest.write_text("\n".join(good_lines) + "\n", encoding="utf-8")
+    print(f"Cookie: {len(good_lines)} geçerli satır → {dest}")
+
+
 def _init_cookies() -> Path | None:
     """
     Cookie dosyasını bulur. Önce Render Secret Files, sonra lokal dosya,
     son çare olarak YT_COOKIES_BASE64 env'den oluşturur.
+    Read-only dosya sistemi varsa /tmp'ye kopyalar ve satırları doğrular.
     """
+    writable_path = Path(tempfile.gettempdir()) / "yt_cookies.txt"
+
     # Mevcut dosyaları kontrol et
     for path in _COOKIE_PATHS:
         if path.exists():
             print(f"cookies.txt bulundu: {path} ({path.stat().st_size} byte)")
-            return path
+            try:
+                # Read-only olabilir, yazılabilir bir yere kopyala + temizle
+                _sanitize_cookies(path, writable_path)
+                return writable_path
+            except Exception as e:
+                print(f"Cookie kopyalama/temizleme hatası: {e}")
+                return path  # En azından orijinali dene
 
     # Hiçbiri yoksa base64 env'den oluştur
     cookie_b64 = os.getenv("YT_COOKIES_BASE64")
-    fallback_path = _COOKIE_PATHS[1]  # backend/cookies.txt
     if cookie_b64:
         try:
             cookie_bytes = base64.b64decode(cookie_b64)
-            fallback_path.write_bytes(cookie_bytes)
+            writable_path.write_bytes(cookie_bytes)
             print(f"cookies.txt env'den oluşturuldu ({len(cookie_bytes)} byte)")
-            return fallback_path
+            # Oluşturulan dosyayı da doğrula
+            _sanitize_cookies(writable_path, writable_path)
+            return writable_path
         except Exception as e:
             print(f"Cookie decode hatası: {e}")
 
